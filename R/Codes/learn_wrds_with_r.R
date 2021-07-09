@@ -1,0 +1,291 @@
+#' ---
+#' title: "Notes on Program WRDS with R"
+#' date:  "`r Sys.Date()`"
+#' author: Chris Zheng
+#' email: chrizheng@vip.sina.com.cn
+#' output:
+#'   html_document:
+#'      fig_caption: yes
+#'      number_sections: yes
+#'      toc: yes
+#'      toc_depth: 4
+#'      toc_float:
+#'        collapsed: no
+#'        smooth_scroll: no
+#'      df_print: paged
+#'      theme: cerulean
+#'      highlight: pygments
+#' ---
+
+
+#+ r setup, include=FALSE
+knitr::opts_chunk$set(eval = TRUE)
+
+
+#' # Learning from tutorial of WRDS
+
+#' ## Connect with WRDS
+
+#+ connect_wrds
+
+library(RPostgres)
+
+# Connect with WRDS database with my account
+wrds <- dbConnect(Postgres(),
+  host = "wrds-pgdata.wharton.upenn.edu",
+  port = 9737,
+  dbname = "wrds",
+  sslmode = "require",
+  user = "cz2003"
+)
+withr::defer(
+  dbDisconnect(wrds)
+)
+
+#' ## Querying the Data set Structure (Metadata)
+
+#' When working with WRDS data, it is often useful to examine the structure of
+#' the dataset, before focusing on the data itself. WRDS data is organized by
+#' vendor (such as crsp) and referred to as a library. Each library contains a
+#' number of database tables or datasets (such as dsf), which contain the actual
+#' data in tabular format with column headers called variables.
+#'
+#' You can analyze the structure of the data through its metadata by querying the
+#' information_schema table, as outlined in the following steps:
+#'
+#'  1. Select a library to work with, and list all available datasets within that
+#'    library
+#'
+#'  2. Select a dataset, and list all available variables (column headers)
+#'    within that dataset
+#'
+#' **NOTE**: When referencing library and dataset names, you must
+#' use all lowercase. This applies to both **information_schema.tables** and
+#' **information_schema.columns** files.
+
+#+ query_wrds_metadata
+
+# Determine the data libraries available at WRDS
+res <- dbSendQuery(wrds, "select distinct table_schema
+                   from information_schema.tables
+                   where table_type ='VIEW'
+                   or table_type ='FOREIGN TABLE'
+                   order by table_schema")
+wrds_libs <- dbFetch(res, n = -1)
+dbClearResult(res)
+head(wrds_libs)
+
+# Determine the datasets within a given library:
+res <- dbSendQuery(wrds, "select distinct table_name
+                   from information_schema.columns
+                   where table_schema='crsp'
+                   order by table_name")
+lib_tables <- dbFetch(res, n = -1)
+dbClearResult(res)
+head(lib_tables)
+
+# Determine the variables (column headers) within a given dataset:
+res <- dbSendQuery(wrds, "select column_name
+                   from information_schema.columns
+                   where table_schema='crsp'
+                   and table_name='dsf'
+                   order by column_name")
+table_columns <- dbFetch(res, n = -1)
+dbClearResult(res)
+table_columns
+
+
+#' ## Query WRDS Data
+
+#' Now that you've learned how to query the metadata and understand the structure
+#' of the data, you are ready to query WRDS data directly. The dbSendQuery()
+#' function can be used quite flexibly to pull WRDS data directly.
+#'
+#' Unlike metadata queries, data queries reference both the data library and its
+#' constituent dataset together in dot notation. For example, a data query for
+#' the dataset **dsf** within the library **crsp** would use the syntax **crsp.dsf**.
+#'
+#' **NOTE:** Unlike querying the PostgreSQL information_schema table, querying
+#' database tables themselves (such as crsp.dsf) does not require that you adhere
+#' to any specific case (i.e. upper- or lowercase). However, to keep things the
+#' same across the board, WRDS recommends always using lowercase for referencing
+#' libraries and their datasets.
+
+#+ query_wrds_data
+
+# Query the crsp.dsf dataset
+
+# Query all columns from a table
+res <- dbSendQuery(wrds, "select * from crsp.dsf")
+data <- dbFetch(res, n = 10)
+dbClearResult(res)
+head(data)
+
+# Query specific variables from a table
+res <- dbSendQuery(wrds, "select cusip,permno,date,bidlo,askhi
+                   from crsp.dsf")
+data <- dbFetch(res, n = 10)
+dbClearResult(res)
+head(data)
+
+# Query variables that meet certain criteria
+res <- dbSendQuery(wrds, "select cusip,permno,date,bidlo,askhi
+                   from crsp.dsf
+                   where askhi > 2500
+                   and bidlo < 2000")
+data <- dbFetch(res, n = 10)
+dbClearResult(res)
+head(data)
+
+# Query by date
+res <- dbSendQuery(wrds, "select cusip,permno,date,bidlo,askhi
+                   from crsp.dsf
+                   where date = '2013-01-04'")
+data <- dbFetch(res, n = -1)
+dbClearResult(res)
+head(data)
+
+# Query by date range
+res <- dbSendQuery(wrds, "select cusip,permno,date,bidlo,askhi
+                   from crsp.dsf
+                   where date between '2013-01-07'
+                   and '2013-01-08'")
+data <- dbFetch(res, n = -1)
+dbClearResult(res)
+head(data)
+
+# Query using multiple search criteria
+res <- dbSendQuery(wrds, "select cusip,permno,date,bidlo,askhi
+                   from crsp.dsf
+                   where date between '1960-01-01'
+                   and '1980-01-01'
+                   and askhi > 2500
+                   and bidlo < 2000")
+data <- dbFetch(res, n = -1)
+dbClearResult(res)
+head(data)
+
+# Join and query two Compustat datasets
+res <- dbSendQuery(wrds, "select a.gvkey, a.datadate, a.tic,
+                   a.conm, a.at, a.lt, b.prccm, b.cshoq
+                   from comp.funda a join comp.secm b
+                   on a.gvkey = b.gvkey
+                   and a.datadate = b.datadate
+                   where a.tic = 'IBM'
+                   and a.datafmt = 'STD'
+                   and a.consol = 'C'
+                   and a.indfmt = 'INDL'")
+data <- dbFetch(res, n = -1)
+dbClearResult(res)
+head(data)
+
+#' Graphing Data using R
+
+#+ graph_wrds_data
+
+res <- dbSendQuery(wrds, "SELECT date,dji FROM djones.djdaily")
+data <- dbFetch(res, n = -1)
+plot(as.Date(data$date, "%Y-%m-%d"),
+  data$dji,
+  xlab = "date", ylab = "dji", type = "l", col = "red"
+)
+
+#' ## Example Data Workflow using R
+
+#+ wrds_example_workflow, eval= FALSE
+
+# Determine what data libraries are available at WRDS
+res <- dbSendQuery(wrds, "select distinct table_schema
+                   from information_schema.tables
+                   where table_type ='VIEW'
+                   or table_type ='FOREIGN TABLE'
+                   order by table_schema")
+data <- dbFetch(res, n=-1)
+dbClearResult(res)
+head(data)
+
+# For the 'crsp' library, determine what datasets are available
+res <- dbSendQuery(wrds, "select distinct table_name
+                   from information_schema.columns
+                   where table_schema='crsp'
+                   order by table_name")
+data <- dbFetch(res, n=-1)
+dbClearResult(res)
+head(data)
+
+# For the Daily Stock File (dsf) dataset, determine what data variables (column
+# headers) are available
+res <- dbSendQuery(wrds, "select column_name
+                   from information_schema.columns
+                   where table_schema='crsp'
+                   and table_name='dsf'
+                   order by column_name")
+data <- dbFetch(res, n=-1)
+dbClearResult(res)
+head(data)
+
+# For the 'cusip', 'permno', 'date', 'bidlo', and 'askhi' data variables,. run a
+# query limiting the result to the first 100 rows in the dataset
+res <- dbSendQuery(wrds, "select cusip,permno,date,bidlo,askhi
+                   from crsp.dsf")
+data <- dbFetch(res, n=100)
+dbClearResult(res)
+head(data)
+
+# Run the query again, but filter the query for 'permno', limiting results to a
+# single day
+res <- dbSendQuery(wrds, "select cusip,permno,date,bidlo,askhi
+                   from crsp.dsf
+                   where permno in (14593, 90319, 12490, 17778)
+                   and date='2013-01-04'")
+data <- dbFetch(res, n=100)
+dbClearResult(res)
+head(data)
+
+# Determine high 'askhi' values by running a query to get a list of dates where
+# 'permno' values posted an Ask Price over $2,000 between the years 2010 and
+# 2013, no longer limiting the number of returned rows (as this is a pretty
+# specific query)
+res <- dbSendQuery(wrds, "select cusip,permno,date,bidlo,askhi
+                   from crsp.dsf
+                   where permno in (14593, 90319, 12490, 17778)
+                   and date between '2010-01-01' and '2013-12-31'
+                   and askhi > 2000")
+data <- dbFetch(res, n=-1)
+dbClearResult(res)
+head(data)
+
+# Only a single 'permno' posted a high Ask price during this date range. Open the
+# search to all permnos that have ever posted an Ask Price over $2,000 in any
+# date range (use distinct to return only one entry per matching permno). Since
+# the query is against all permnos and the entire date range of the dataset, this
+# query may take a little longer
+res <- dbSendQuery(wrds, "select distinct permno
+                   from crsp.dsf
+                   where askhi > 2000")
+data <- dbFetch(res, n=-1)
+dbClearResult(res)
+head(data)
+
+# Retrieve all dates for which an Ask Price over $2000 was posted, along with
+# the permnos that posted them. This will give a list of dates that match, with
+# an additional entry for that date if additional permnos match as well. By
+# 2011, there are two results
+res <- dbSendQuery(wrds, "select distinct date,permno
+                   from crsp.dsf
+                   where askhi > 2000
+                   order by date")
+data <- dbFetch(res, n=-1)
+dbClearResult(res)
+head(data)
+
+# Query for the highest Ask ever posted (searching only through Asks over
+# $2000), on what date it posted, and which permno posted it. Use limit 1 to
+# speed up the search since only the top value is desired:
+res <- dbSendQuery(wrds, "select permno,askhi,date
+                   from crsp.dsf
+                   where askhi > 2000
+                   order by askhi desc")
+data <- dbFetch(res, n=1)
+dbClearResult(res)
+head(data)
